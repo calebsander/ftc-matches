@@ -1,4 +1,5 @@
 const fs = require('fs');
+const https = require('https');
 const sb = require('structure-bytes');
 const xlsx = require('xlsx');
 
@@ -75,13 +76,7 @@ function getStatus(statusString) {
 			throw new Error('No such status: ' + statusString);
 	}
 }
-const REPAIR_ZONE = 'REPAIR_ZONE',
-	FLOOR_GOAL = 'FLOOR_GOAL',
-	MOUNTAIN_TOUCHING_FLOOR = 'HALF_ON',
-	LOW_ZONE = 'LOW_ZONE',
-	MID_ZONE = 'MID_ZONE',
-	HIGH_ZONE = 'HIGH_ZONE';
-const ZONES = [null, REPAIR_ZONE, FLOOR_GOAL, MOUNTAIN_TOUCHING_FLOOR, LOW_ZONE, MID_ZONE, HIGH_ZONE];
+const ZONES = [null, 'REPAIR_ZONE', 'FLOOR_GOAL', 'HALF_ON', 'LOW_ZONE', 'MID_ZONE', 'HIGH_ZONE'];
 const teamType = new sb.StructType({
 	number: new sb.UnsignedShortType,
 	status: new sb.EnumType({
@@ -147,9 +142,17 @@ const type = new sb.ArrayType(
 		blueScore: scoreType
 	})
 );
-const SPACE = ' ';
-fs.readFile(__dirname + '/Scoring-System-Results.xlsx', (err, data) => {
-	if (err) throw err;
+const SPACE = ' ', ZERO = '0';
+https.get('https://standings.firstinspires.org/ftc/Scoring-System-Results.xlsx', res => {
+	const chunks = [];
+	res.on('error', err => {
+		throw err
+	});
+	res.on('data', chunk => chunks.push(chunk)).on('end', () => {
+		parseFile(Buffer.concat(chunks));
+	});
+});
+function parseFile(data) {
 	const document = xlsx.read(data, {
 		cellDates: true,
 		cellFormula: false,
@@ -173,7 +176,7 @@ fs.readFile(__dirname + '/Scoring-System-Results.xlsx', (err, data) => {
 		else dateString = dateCell.substring(0, dateSpaceIndex);
 		const date = new Date(dateString);
 		const typeString = sheet[COLUMNS.matchType + rowString].w;
-		if (typeString === '0') continue; //practice match?
+		if (typeString === ZERO) continue; //practice match?
 		const redTeams = [];
 		for (let i = 0; i < COLUMNS.redTeams.length; i++) {
 			const teamNumber = sheet[COLUMNS.redTeams[i] + rowString].v;
@@ -268,4 +271,4 @@ fs.readFile(__dirname + '/Scoring-System-Results.xlsx', (err, data) => {
 	}, err => {
 		if (err) throw err;
 	});
-});
+}
