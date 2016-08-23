@@ -1,9 +1,9 @@
-const fs = require('fs');
-const https = require('https');
-const sb = require('structure-bytes');
-const xlsx = require('xlsx');
+const fs = require('fs')
+const https = require('https')
+const sb = require('structure-bytes')
+const xlsx = require('xlsx')
 
-const RANGE_MATCH = /^A1:([A-Z]+)([0-9]+)$/;
+const RANGE_MATCH = /^A1:([A-Z]+)([0-9]+)$/
 const COLUMNS = {
 	date: 'A',
 	event: 'B',
@@ -45,47 +45,47 @@ const COLUMNS = {
 		minorPenalties: 'BG', //caused by this alliance
 		majorPenalties: 'BH'
 	}
-};
+}
 const QUALIFICATION = 'QUALIFICATION',
 	SEMIFINAL = 'SEMIFINAL',
-	FINAL = 'FINAL';
+	FINAL = 'FINAL'
 function getMatchType(typeString) {
 	switch (typeString) {
 		case '1':
-			return QUALIFICATION;
+			return QUALIFICATION
 		case '3':
-			return SEMIFINAL;
+			return SEMIFINAL
 		case '4':
-			return FINAL;
+			return FINAL
 		default:
-			throw new Error('No such match type: ' + typeString);
+			throw new Error('No such match type: ' + typeString)
 	}
 }
 const ATTENDED = 'ATTENDED',
 	NO_SHOW = 'NO_SHOW',
-	DISQUALIFIED = 'DISQUALIFIED';
+	DISQUALIFIED = 'DISQUALIFIED'
 function getStatus(statusString) {
 	switch (statusString) {
 		case '0':
-			return ATTENDED;
+			return ATTENDED
 		case '1':
-			return NO_SHOW;
+			return NO_SHOW
 		case '2':
-			return DISQUALIFIED;
+			return DISQUALIFIED
 		default:
-			throw new Error('No such status: ' + statusString);
+			throw new Error('No such status: ' + statusString)
 	}
 }
-const ZONES = [null, 'REPAIR_ZONE', 'FLOOR_GOAL', 'HALF_ON', 'LOW_ZONE', 'MID_ZONE', 'HIGH_ZONE'];
+const ZONES = [null, 'REPAIR_ZONE', 'FLOOR_GOAL', 'HALF_ON', 'LOW_ZONE', 'MID_ZONE', 'HIGH_ZONE']
 const teamType = new sb.StructType({
 	number: new sb.UnsignedShortType,
 	status: new sb.EnumType({
 		type: new sb.StringType,
 		values: [ATTENDED, NO_SHOW, DISQUALIFIED]
 	})
-});
+})
 const teamsType = new sb.ChoiceType([
-	new sb.TupleType({
+	new sb.TupleType({ //not sure why some matches are only marked as having 1 team
 		type: teamType,
 		length: 1
 	}),
@@ -97,14 +97,14 @@ const teamsType = new sb.ChoiceType([
 		type: teamType,
 		length: 3
 	})
-]);
+])
 const placementType = new sb.TupleType({
 	type: new sb.EnumType({
 		type: new sb.OptionalType(new sb.StringType),
 		values: ZONES
 	}),
 	length: 2
-});
+})
 const scoreType = new sb.StructType({
 	auton: new sb.StructType({
 		placements: placementType,
@@ -126,80 +126,96 @@ const scoreType = new sb.StructType({
 		minor: new sb.UnsignedByteType,
 		major: new sb.UnsignedByteType
 	})
-});
-const type = new sb.ArrayType(
+})
+const type = new sb.MapType(
 	new sb.StructType({
 		month: new sb.UnsignedByteType,
 		day: new sb.UnsignedByteType,
-		type: new sb.EnumType({
-			type: new sb.StringType,
-			values: [QUALIFICATION, SEMIFINAL, FINAL]
-		}),
-		number: new sb.UnsignedByteType,
-		redTeams: teamsType,
-		blueTeams: teamsType,
-		redScore: scoreType,
-		blueScore: scoreType
-	})
-);
-const SPACE = ' ', ZERO = '0';
+		name: new sb.PointerType(new sb.StringType)
+	}),
+	new sb.ArrayType(
+		new sb.StructType({
+			type: new sb.EnumType({
+				type: new sb.StringType,
+				values: [QUALIFICATION, SEMIFINAL, FINAL]
+			}),
+			number: new sb.UnsignedByteType,
+			redTeams: teamsType,
+			blueTeams: teamsType,
+			redScore: scoreType,
+			blueScore: scoreType
+		})
+	)
+)
+const SPACE = ' ', ZERO = '0'
 https.get('https://standings.firstinspires.org/ftc/Scoring-System-Results.xlsx', res => {
-	const chunks = [];
+	const chunks = []
 	res.on('error', err => {
 		throw err
-	});
+	})
 	res.on('data', chunk => chunks.push(chunk)).on('end', () => {
-		parseFile(Buffer.concat(chunks));
-	});
-});
+		parseFile(Buffer.concat(chunks))
+	})
+})
 function parseFile(data) {
 	const document = xlsx.read(data, {
 		cellDates: true,
 		cellFormula: false,
 		cellHTML: false
-	});
-	const sheet = document.Sheets.Sheet1;
-	const range = sheet['!ref'];
-	const rangeMatch = RANGE_MATCH.exec(range);
-	const lastRow = Number(rangeMatch[2]);
+	})
+	const sheet = document.Sheets.Sheet1
+	const range = sheet['!ref']
+	const rangeMatch = RANGE_MATCH.exec(range)
+	const lastRow = Number(rangeMatch[2])
 	const redAutonPlacementColumns = COLUMNS.redScore.autonomousPlacements,
 		redTeleopPlacementColumns = COLUMNS.redScore.teleopPlacements,
 		blueAutonPlacementColumns = COLUMNS.blueScore.autonomousPlacements,
-		blueTeleopPlacementColumns = COLUMNS.blueScore.teleopPlacements;
-	const results = [];
+		blueTeleopPlacementColumns = COLUMNS.blueScore.teleopPlacements
+	const results = new Map
+	const events = {}
 	for (let row = 2; row < lastRow; row++) {
-		const rowString = String(row);
-		const dateCell = sheet[COLUMNS.date + rowString].w;
-		const dateSpaceIndex = dateCell.indexOf(SPACE);
-		let dateString;
-		if (dateSpaceIndex === -1) dateString = dateCell;
-		else dateString = dateCell.substring(0, dateSpaceIndex);
-		const date = new Date(dateString);
-		const typeString = sheet[COLUMNS.matchType + rowString].w;
-		if (typeString === ZERO) continue; //practice match?
-		const redTeams = [];
+		const rowString = String(row)
+		const typeString = sheet[COLUMNS.matchType + rowString].w
+		if (typeString === ZERO) continue //practice match?
+		const eventName = sheet[COLUMNS.event + rowString].w
+		let event = events[eventName]
+		if (!event) {
+			const dateCell = sheet[COLUMNS.date + rowString].w
+			const dateSpaceIndex = dateCell.indexOf(SPACE)
+			let dateString
+			if (dateSpaceIndex === -1) dateString = dateCell
+			else dateString = dateCell.substring(0, dateSpaceIndex)
+			const date = new Date(dateString)
+			event = events[eventName] = {
+				month: date.getMonth() + 1,
+				day: date.getDate(),
+				name: eventName
+			}
+			results.set(event, [])
+		}
+		const redTeams = []
 		for (let i = 0; i < COLUMNS.redTeams.length; i++) {
-			const teamNumber = sheet[COLUMNS.redTeams[i] + rowString].v;
-			if (!teamNumber) break;
-			const status = getStatus(sheet[COLUMNS.redStatuses[i] + rowString].w);
-			redTeams[i] = {number: teamNumber, status};
+			const teamNumber = sheet[COLUMNS.redTeams[i] + rowString].v
+			if (!teamNumber) break
+			const status = getStatus(sheet[COLUMNS.redStatuses[i] + rowString].w)
+			redTeams[i] = {number: teamNumber, status}
 		}
-		const blueTeams = [];
+		const blueTeams = []
 		for (let i = 0; i < COLUMNS.blueTeams.length; i++) {
-			const teamNumber = sheet[COLUMNS.blueTeams[i] + rowString].v;
-			if (!teamNumber) break;
-			const status = getStatus(sheet[COLUMNS.blueStatuses[i] + rowString].w);
-			blueTeams[i] = {number: teamNumber, status};
+			const teamNumber = sheet[COLUMNS.blueTeams[i] + rowString].v
+			if (!teamNumber) break
+			const status = getStatus(sheet[COLUMNS.blueStatuses[i] + rowString].w)
+			blueTeams[i] = {number: teamNumber, status}
 		}
-		const redAutonPlacements = new Array(2);
-		for (let i = 0; i < redAutonPlacementColumns.length; i++) {
-			redAutonPlacements[i] = ZONES[sheet[redAutonPlacementColumns[i] + rowString].v];
+		const redAutonPlacements = new Array(2)
+		for (let i = 0; i < redAutonPlacements.length; i++) {
+			redAutonPlacements[i] = ZONES[sheet[redAutonPlacementColumns[i] + rowString].v]
 		}
-		const redTeleopPlacements = new Array(2);
-		for (let i = 0; i < redTeleopPlacementColumns.length; i++) {
-			redTeleopPlacements[i] = ZONES[sheet[redTeleopPlacementColumns[i] + rowString].v];
+		const redTeleopPlacements = new Array(2)
+		for (let i = 0; i < redTeleopPlacements.length; i++) {
+			redTeleopPlacements[i] = ZONES[sheet[redTeleopPlacementColumns[i] + rowString].v]
 		}
-		const redAutonClimbers = sheet[COLUMNS.redScore.autonomousClimbers + rowString].v;
+		const redAutonClimbers = sheet[COLUMNS.redScore.autonomousClimbers + rowString].v
 		const redScore = {
 			auton: {
 				placements: redAutonPlacements,
@@ -221,16 +237,16 @@ function parseFile(data) {
 				minor: sheet[COLUMNS.redScore.minorPenalties + rowString].v,
 				major: sheet[COLUMNS.redScore.majorPenalties + rowString].v
 			}
-		};
-		const blueAutonPlacements = new Array(2);
-		for (let i = 0; i < blueAutonPlacementColumns.length; i++) {
-			blueAutonPlacements[i] = ZONES[sheet[blueAutonPlacementColumns[i] + rowString].v];
 		}
-		const blueTeleopPlacements = new Array(2);
-		for (let i = 0; i < blueTeleopPlacementColumns.length; i++) {
-			blueTeleopPlacements[i] = ZONES[sheet[blueTeleopPlacementColumns[i] + rowString].v];
+		const blueAutonPlacements = new Array(2)
+		for (let i = 0; i < blueAutonPlacements.length; i++) {
+			blueAutonPlacements[i] = ZONES[sheet[blueAutonPlacementColumns[i] + rowString].v]
 		}
-		const blueAutonClimbers = sheet[COLUMNS.blueScore.autonomousClimbers + rowString].v;
+		const blueTeleopPlacements = new Array(2)
+		for (let i = 0; i < blueTeleopPlacements.length; i++) {
+			blueTeleopPlacements[i] = ZONES[sheet[blueTeleopPlacementColumns[i] + rowString].v]
+		}
+		const blueAutonClimbers = sheet[COLUMNS.blueScore.autonomousClimbers + rowString].v
 		const blueScore = {
 			auton: {
 				placements: blueAutonPlacements,
@@ -252,23 +268,21 @@ function parseFile(data) {
 				minor: sheet[COLUMNS.blueScore.minorPenalties + rowString].v,
 				major: sheet[COLUMNS.blueScore.majorPenalties + rowString].v
 			}
-		};
-		results.push({
-			month: date.getMonth() + 1,
-			day: date.getDate(),
+		}
+		results.get(event).push({
 			type: getMatchType(typeString),
 			number: sheet[COLUMNS.matchNumber + rowString].v,
 			redTeams,
 			blueTeams,
 			redScore,
 			blueScore
-		});
+		})
 	}
 	sb.writeTypeAndValue({
 		type,
 		value: results,
 		outStream: fs.createWriteStream(__dirname + '/results.sbtv')
 	}, err => {
-		if (err) throw err;
-	});
+		if (err) throw err
+	})
 }
