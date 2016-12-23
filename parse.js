@@ -92,11 +92,11 @@ const teamType = new sb.StructType({
 const teamsType = new sb.ChoiceType([
 	new sb.TupleType({
 		type: teamType,
-		length: 2
+		length: MATCH_TEAMS
 	}),
 	new sb.TupleType({
 		type: teamType,
-		length: 3
+		length: MATCH_TEAMS + 1
 	})
 ])
 const particleCountType = new sb.StructType({
@@ -115,7 +115,7 @@ const scoreType = new sb.StructType({
 				type: new sb.OptionalType(new sb.StringType),
 				values: ZONES
 			}),
-			length: 2
+			length: MATCH_TEAMS
 		})
 	}),
 	teleop: new sb.StructType({
