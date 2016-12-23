@@ -1,9 +1,39 @@
 const fs = require('fs')
 const https = require('https')
+const reg = require('readable-regex')
 const sb = require('structure-bytes')
 const xlsx = require('xlsx')
 
-const RANGE_MATCH = /^A1:([A-Z]+)([0-9]+)$/
+const RANGE_MATCH = reg([
+	reg.START,
+	'A1:',
+	reg.some(
+		reg.charIn(['A', 'Z'])
+	),
+	reg.capture(
+		reg.some(
+			reg.charIn(['0', '9'])
+		),
+		'lastRow'
+	)
+])
+const RED_AUTON_PARTICLES = {
+	center: 'AI',
+	corner: 'AJ'
+}
+const RED_TELEOP_PARTICLES = {
+	center: 'AN',
+	corner: 'AO'
+}
+const BLUE_AUTON_PARTICLES = {
+	center: 'AW',
+	corner: 'AX'
+}
+const BLUE_TELEOP_PARTICLES = {
+	center: 'BB',
+	corner: 'BC'
+}
+const MATCH_TEAMS = 2
 const COLUMNS = {
 	date: 'A',
 	event: 'B',
@@ -12,38 +42,28 @@ const COLUMNS = {
 	redTeams: ['H', 'I', 'J'],
 	blueTeams: ['K', 'L', 'M'],
 	redStatuses: ['N', 'O', 'P'],
-	blueStatuses: ['Q', 'R', 'S'],
+	blueStatuses: ['T', 'U', 'V'],
 	redScore: {
-		autonomousPlacements: ['AA', 'AB'],
-		rescueBeacons: 'AC',
-		autonomousClimbers: 'AD',
-		teleopPlacements: ['AE', 'AF'],
-		floorGoal: 'AG',
-		highGoal: 'AH',
-		lowGoal: 'AI',
-		midGoal: 'AJ',
-		teleopClimbers: 'AK', //includes autonomous ones - there are 356 instances where (autonClimbers + teleopClimbers > 4) and only 33 where (autonClimbers > teleopClimbers), which suggests that they were usually including autonomous ones in the teleop count
-		zips: 'AL',
-		allClears: 'AM',
-		hanging: 'AN',
-		minorPenalties: 'AO', //caused by this alliance
-		majorPenalties: 'AP'
+		autonomousBeacons: 'AG',
+		capBallRemoved: 'AH',
+		autonomousParticles: RED_AUTON_PARTICLES,
+		placements: ['AK', 'AL'],
+		teleopBeacons: 'AM',
+		teleopParticles: RED_TELEOP_PARTICLES,
+		capBallPlacement: 'AP',
+		minorPenalties: 'AQ', //caused by this alliance
+		majorPenalties: 'AR'
 	},
 	blueScore: {
-		autonomousPlacements: ['AS', 'AT'],
-		rescueBeacons: 'AU',
-		autonomousClimbers: 'AV',
-		teleopPlacements: ['AW', 'AX'],
-		floorGoal: 'AY',
-		highGoal: 'AZ',
-		lowGoal: 'BA',
-		midGoal: 'BB',
-		teleopClimbers: 'BC', //includes autonomous ones
-		zips: 'BD',
-		allClears: 'BE',
-		hanging: 'BF',
-		minorPenalties: 'BG', //caused by this alliance
-		majorPenalties: 'BH'
+		autonomousBeacons: 'AU',
+		capBallRemoved: 'AV',
+		autonomousParticles: BLUE_AUTON_PARTICLES,
+		placements: ['AY', 'AZ'],
+		teleopBeacons: 'BA',
+		teleopParticles: BLUE_TELEOP_PARTICLES,
+		capBallPlacement: 'BD',
+		minorPenalties: 'BE', //caused by this alliance
+		majorPenalties: 'BF'
 	}
 }
 const QUALIFICATION = 'QUALIFICATION',
@@ -61,34 +81,15 @@ function getMatchType(typeString) {
 			throw new Error('No such match type: ' + typeString)
 	}
 }
-const ATTENDED = 'ATTENDED',
-	NO_SHOW = 'NO_SHOW',
-	DISQUALIFIED = 'DISQUALIFIED'
-function getStatus(statusString) {
-	switch (statusString) {
-		case '0':
-			return ATTENDED
-		case '1':
-			return NO_SHOW
-		case '2':
-			return DISQUALIFIED
-		default:
-			throw new Error('No such status: ' + statusString)
-	}
-}
-const ZONES = [null, 'REPAIR_ZONE', 'FLOOR_GOAL', 'HALF_ON', 'LOW_ZONE', 'MID_ZONE', 'HIGH_ZONE']
+const STATUSES = ['ATTENDED', 'NO_SHOW', 'DISQUALIFIED']
 const teamType = new sb.StructType({
 	number: new sb.UnsignedShortType,
 	status: new sb.EnumType({
 		type: new sb.StringType,
-		values: [ATTENDED, NO_SHOW, DISQUALIFIED]
+		values: STATUSES
 	})
 })
 const teamsType = new sb.ChoiceType([
-	new sb.TupleType({ //not sure why some matches are only marked as having 1 team
-		type: teamType,
-		length: 1
-	}),
 	new sb.TupleType({
 		type: teamType,
 		length: 2
@@ -98,29 +99,32 @@ const teamsType = new sb.ChoiceType([
 		length: 3
 	})
 ])
-const placementType = new sb.TupleType({
-	type: new sb.EnumType({
-		type: new sb.OptionalType(new sb.StringType),
-		values: ZONES
-	}),
-	length: 2
+const particleCountType = new sb.StructType({
+	center: new sb.UnsignedByteType,
+	corner: new sb.UnsignedByteType
 })
+const ZONES = [null, 'CENTER_HALF', 'CENTER_FULL', 'CORNER_HALF', 'CORNER_FULL']
+const CAP_BALL_ZONES = [null, 'LOW', 'HIGH', 'CAPPED']
 const scoreType = new sb.StructType({
 	auton: new sb.StructType({
-		placements: placementType,
 		beacons: new sb.UnsignedByteType,
-		climbers: new sb.UnsignedByteType
+		capBall: new sb.BooleanType,
+		particles: particleCountType,
+		placements: new sb.TupleType({
+			type: new sb.EnumType({
+				type: new sb.OptionalType(new sb.StringType),
+				values: ZONES
+			}),
+			length: 2
+		})
 	}),
 	teleop: new sb.StructType({
-		placements: placementType,
-		floor: new sb.UnsignedByteType,
-		low: new sb.UnsignedByteType,
-		mid: new sb.UnsignedByteType,
-		high: new sb.UnsignedByteType,
-		climbers: new sb.UnsignedByteType, //not including autonomous ones
-		zips: new sb.UnsignedByteType,
-		allClears: new sb.UnsignedByteType,
-		hanging: new sb.UnsignedByteType
+		beacons: new sb.UnsignedByteType,
+		particles: particleCountType,
+		capBall: new sb.EnumType({
+			type: new sb.OptionalType(new sb.StringType),
+			values: CAP_BALL_ZONES
+		})
 	}),
 	penalties: new sb.StructType({
 		minor: new sb.UnsignedByteType,
@@ -131,7 +135,7 @@ const type = new sb.MapType(
 	new sb.StructType({
 		month: new sb.UnsignedByteType,
 		day: new sb.UnsignedByteType,
-		name: new sb.PointerType(new sb.StringType)
+		name: new sb.StringType
 	}),
 	new sb.ArrayType(
 		new sb.StructType({
@@ -150,12 +154,14 @@ const type = new sb.MapType(
 const SPACE = ' ', ZERO = '0'
 https.get('https://standings.firstinspires.org/ftc/Scoring-System-Results.xlsx', res => {
 	const chunks = []
-	res.on('error', err => {
-		throw err
-	})
-	res.on('data', chunk => chunks.push(chunk)).on('end', () => {
-		parseFile(Buffer.concat(chunks))
-	})
+	res
+		.on('error', err => {
+			throw err
+		})
+		.on('data', chunk => chunks.push(chunk))
+		.on('end', () => {
+			parseFile(Buffer.concat(chunks))
+		})
 })
 function parseFile(data) {
 	const document = xlsx.read(data, {
@@ -165,12 +171,8 @@ function parseFile(data) {
 	})
 	const sheet = document.Sheets.Sheet1
 	const range = sheet['!ref']
-	const rangeMatch = RANGE_MATCH.exec(range)
-	const lastRow = Number(rangeMatch[2])
-	const redAutonPlacementColumns = COLUMNS.redScore.autonomousPlacements,
-		redTeleopPlacementColumns = COLUMNS.redScore.teleopPlacements,
-		blueAutonPlacementColumns = COLUMNS.blueScore.autonomousPlacements,
-		blueTeleopPlacementColumns = COLUMNS.blueScore.teleopPlacements
+	const rangeMatch = reg.exec(RANGE_MATCH, range)
+	const lastRow = Number(rangeMatch.get('lastRow'))
 	const results = new Map
 	const events = {}
 	for (let row = 2; row < lastRow; row++) {
@@ -195,74 +197,70 @@ function parseFile(data) {
 		}
 		const redTeams = []
 		for (let i = 0; i < COLUMNS.redTeams.length; i++) {
-			const teamNumber = sheet[COLUMNS.redTeams[i] + rowString].v
-			if (!teamNumber) break
-			const status = getStatus(sheet[COLUMNS.redStatuses[i] + rowString].w)
-			redTeams[i] = {number: teamNumber, status}
+			const number = sheet[COLUMNS.redTeams[i] + rowString].v
+			if (!number) break
+			const status = STATUSES[sheet[COLUMNS.redStatuses[i] + rowString].v]
+			redTeams[i] = {number, status}
 		}
 		const blueTeams = []
 		for (let i = 0; i < COLUMNS.blueTeams.length; i++) {
-			const teamNumber = sheet[COLUMNS.blueTeams[i] + rowString].v
-			if (!teamNumber) break
-			const status = getStatus(sheet[COLUMNS.blueStatuses[i] + rowString].w)
-			blueTeams[i] = {number: teamNumber, status}
+			const number = sheet[COLUMNS.blueTeams[i] + rowString].v
+			if (!number) break
+			const status = STATUSES[sheet[COLUMNS.blueStatuses[i] + rowString].w]
+			blueTeams[i] = {number, status}
 		}
-		const redAutonPlacements = new Array(2)
-		for (let i = 0; i < redAutonPlacements.length; i++) {
-			redAutonPlacements[i] = ZONES[sheet[redAutonPlacementColumns[i] + rowString].v]
+		const redPlacements = new Array(MATCH_TEAMS)
+		for (let i = 0; i < redPlacements.length; i++) {
+			redPlacements[i] = ZONES[sheet[COLUMNS.redScore.placements[i] + rowString].v]
 		}
-		const redTeleopPlacements = new Array(2)
-		for (let i = 0; i < redTeleopPlacements.length; i++) {
-			redTeleopPlacements[i] = ZONES[sheet[redTeleopPlacementColumns[i] + rowString].v]
+		const redAutonParticles = {}
+		for (const type in RED_AUTON_PARTICLES) {
+			redAutonParticles[type] = sheet[RED_AUTON_PARTICLES[type] + rowString].v
 		}
-		const redAutonClimbers = sheet[COLUMNS.redScore.autonomousClimbers + rowString].v
+		const redTeleopParticles = {}
+		for (const type in RED_TELEOP_PARTICLES) {
+			redTeleopParticles[type] = sheet[RED_TELEOP_PARTICLES[type] + rowString].v
+		}
 		const redScore = {
 			auton: {
-				placements: redAutonPlacements,
-				beacons: sheet[COLUMNS.redScore.rescueBeacons + rowString].v,
-				climbers: redAutonClimbers
+				beacons: sheet[COLUMNS.redScore.autonomousBeacons + rowString].v,
+				capBall: sheet[COLUMNS.redScore.capBallRemoved + rowString].v,
+				particles: redAutonParticles,
+				placements: redPlacements
 			},
 			teleop: {
-				placements: redTeleopPlacements,
-				floor: sheet[COLUMNS.redScore.floorGoal + rowString].v,
-				low: sheet[COLUMNS.redScore.lowGoal + rowString].v,
-				mid: sheet[COLUMNS.redScore.midGoal + rowString].v,
-				high: sheet[COLUMNS.redScore.highGoal + rowString].v,
-				climbers: Math.max(sheet[COLUMNS.redScore.teleopClimbers + rowString].v - redAutonClimbers, 0),
-				zips: sheet[COLUMNS.redScore.zips + rowString].v,
-				allClears: sheet[COLUMNS.redScore.allClears + rowString].v,
-				hanging: sheet[COLUMNS.redScore.hanging + rowString].v
+				beacons: sheet[COLUMNS.redScore.teleopBeacons + rowString].v,
+				particles: redTeleopParticles,
+				capBall: CAP_BALL_ZONES[sheet[COLUMNS.redScore.capBallPlacement + rowString].v]
 			},
 			penalties: {
 				minor: sheet[COLUMNS.redScore.minorPenalties + rowString].v,
 				major: sheet[COLUMNS.redScore.majorPenalties + rowString].v
 			}
 		}
-		const blueAutonPlacements = new Array(2)
-		for (let i = 0; i < blueAutonPlacements.length; i++) {
-			blueAutonPlacements[i] = ZONES[sheet[blueAutonPlacementColumns[i] + rowString].v]
+		const bluePlacements = new Array(MATCH_TEAMS)
+		for (let i = 0; i < bluePlacements.length; i++) {
+			bluePlacements[i] = ZONES[sheet[COLUMNS.blueScore.placements[i] + rowString].v]
 		}
-		const blueTeleopPlacements = new Array(2)
-		for (let i = 0; i < blueTeleopPlacements.length; i++) {
-			blueTeleopPlacements[i] = ZONES[sheet[blueTeleopPlacementColumns[i] + rowString].v]
+		const blueAutonParticles = {}
+		for (const type in BLUE_AUTON_PARTICLES) {
+			blueAutonParticles[type] = sheet[BLUE_AUTON_PARTICLES[type] + rowString].v
 		}
-		const blueAutonClimbers = sheet[COLUMNS.blueScore.autonomousClimbers + rowString].v
+		const blueTeleopParticles = {}
+		for (const type in BLUE_TELEOP_PARTICLES) {
+			blueTeleopParticles[type] = sheet[BLUE_TELEOP_PARTICLES[type] + rowString].v
+		}
 		const blueScore = {
 			auton: {
-				placements: blueAutonPlacements,
-				beacons: sheet[COLUMNS.blueScore.rescueBeacons + rowString].v,
-				climbers: blueAutonClimbers
+				beacons: sheet[COLUMNS.blueScore.autonomousBeacons + rowString].v,
+				capBall: sheet[COLUMNS.blueScore.capBallRemoved + rowString].v,
+				particles: blueAutonParticles,
+				placements: bluePlacements
 			},
 			teleop: {
-				placements: blueTeleopPlacements,
-				floor: sheet[COLUMNS.blueScore.floorGoal + rowString].v,
-				low: sheet[COLUMNS.blueScore.lowGoal + rowString].v,
-				mid: sheet[COLUMNS.blueScore.midGoal + rowString].v,
-				high: sheet[COLUMNS.blueScore.highGoal + rowString].v,
-				climbers: Math.max(sheet[COLUMNS.blueScore.teleopClimbers + rowString].v - blueAutonClimbers, 0),
-				zips: sheet[COLUMNS.blueScore.zips + rowString].v,
-				allClears: sheet[COLUMNS.blueScore.allClears + rowString].v,
-				hanging: sheet[COLUMNS.blueScore.hanging + rowString].v
+				beacons: sheet[COLUMNS.blueScore.teleopBeacons + rowString].v,
+				particles: blueTeleopParticles,
+				capBall: CAP_BALL_ZONES[sheet[COLUMNS.blueScore.capBallPlacement + rowString].v]
 			},
 			penalties: {
 				minor: sheet[COLUMNS.blueScore.minorPenalties + rowString].v,

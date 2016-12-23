@@ -1,11 +1,12 @@
 {
 	"name": "ftc-matches",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"description": "Parses FIRST-provided Excel file that contains the results of all season matches",
 	"main": "parse.js",
 	"license": "MIT",
 	"dependencies": {
-		"structure-bytes": "2.x.x",
+		"readable-regex": "1.0.x",
+		"structure-bytes": "3.x.10",
 		"xlsx": "0.8.x"
 	},
 	"repository": {
