@@ -6,7 +6,7 @@
 	"license": "MIT",
 	"dependencies": {
 		"readable-regex": "1.0.x",
-		"structure-bytes": "3.x.10",
+		"structure-bytes": "3.x.11",
 		"xlsx": "0.8.x"
 	},
 	"repository": {
